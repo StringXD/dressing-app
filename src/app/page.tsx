@@ -1,69 +1,84 @@
-import Image from "next/image";
+import { PhotoGuide } from '@/components/photo-guide'
+import { UploadDropzone } from '@/components/upload-dropzone'
+import { hasEnv } from '@/lib/env'
+
+/** 依赖项清单：缺什么、去哪儿拿、影响哪个功能 */
+const SETUP_ITEMS = [
+  {
+    key: 'FAL_KEY' as const,
+    label: 'fal.ai',
+    purpose: '试穿与换发型的图像生成',
+    affects: ['试衣间', '换发型'],
+  },
+  {
+    key: 'ONEBOUND_KEY' as const,
+    label: '万邦开放平台',
+    purpose: '淘宝 / 天猫 / 京东 商品链接解析',
+    affects: ['链接换装'],
+  },
+  {
+    key: 'FIRECRAWL_API_KEY' as const,
+    label: 'Firecrawl',
+    purpose: '国际品牌站商品页解析（降级链第二级）',
+    affects: ['链接换装'],
+  },
+  {
+    key: 'ANTHROPIC_API_KEY' as const,
+    label: 'LLM（Agent）',
+    purpose: '对话式 Agent 与服装识别',
+    affects: ['对话交互'],
+  },
+]
 
 export default function Home() {
+  const missing = SETUP_ITEMS.filter((item) => !hasEnv(item.key))
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+    <main className="mx-auto w-full max-w-2xl px-5 py-10 sm:py-16">
+      <header>
+        <h1 className="text-2xl font-semibold tracking-tight">穿搭模拟</h1>
+        <p className="mt-2 text-sm text-neutral-500">
+          上传一张全身照，换上不同衣服和发型，直接看效果。
+        </p>
+      </header>
+
+      {missing.length > 0 && (
+        <section className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-900 dark:bg-amber-950">
+          <h2 className="text-sm font-medium text-amber-900 dark:text-amber-200">
+            开发进度：还缺 {missing.length} 项配置
+          </h2>
+          <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
+            上传功能已可用；生成类功能需要下列 Key。填写到项目根目录的{' '}
+            <code className="rounded bg-amber-100 px-1 dark:bg-amber-900">.env</code>{' '}
+            后重启即可。
           </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
-  );
+          <ul className="mt-3 space-y-2">
+            {missing.map((item) => (
+              <li key={item.key} className="text-xs">
+                <span className="font-medium text-amber-900 dark:text-amber-200">
+                  {item.label}
+                </span>
+                <span className="text-amber-700 dark:text-amber-400">
+                  {' '}
+                  · {item.purpose} · 影响：{item.affects.join('、')}
+                </span>
+                <br />
+                <code className="text-amber-600 dark:text-amber-500">{item.key}</code>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      <section className="mt-8">
+        <h2 className="mb-3 text-sm font-medium">第一步：上传你的全身照</h2>
+        <UploadDropzone
+          label="上传全身照"
+          hint="支持 JPG / PNG / WebP，会自动压缩并清除定位信息"
+        />
+      </section>
+
+      <PhotoGuide className="mt-10" />
+    </main>
+  )
 }

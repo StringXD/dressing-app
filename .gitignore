@@ -32,6 +32,16 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
+
+# 本地数据与验证产物
+/data/
+/spike-output/
+# 真人照片样例：属于个人素材，一旦提交就会永久留在公开仓库历史里
+/example/
+
+# 内部规划与 agent 工作笔记 —— 不对外暴露思考过程
+/.narrafork/
 
 # vercel
 .vercel

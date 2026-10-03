@@ -1,0 +1,28 @@
+# 本地开发基础设施。
+#
+# 这里只跑 Postgres —— Next.js 与 worker 用 npm 直接跑（热重载更方便）。
+# 部署时再为它们加 Dockerfile 多 target（runner / worker）。
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: dressing-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dressing}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dressing}
+      POSTGRES_DB: ${POSTGRES_DB:-dressing}
+      # 中文/emoji 内容需要正确排序，否则 ORDER BY 行为异常
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8"
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dressing} -d ${POSTGRES_DB:-dressing}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  pgdata:

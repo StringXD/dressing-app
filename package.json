@@ -1,26 +1,51 @@
 {
-  "name": "scaffold-tmp",
+  "name": "dressing-app",
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --port 4000",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "typecheck": "next typegen && tsc --noEmit",
+    "worker": "tsx watch worker/index.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:studio": "drizzle-kit studio",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "smoke:upload": "tsx scripts/smoke-upload.ts",
+    "smoke:queue": "tsx scripts/smoke-queue.ts",
+    "smoke:resolve": "tsx scripts/smoke-resolve.ts",
+    "spike:fal": "tsx scripts/spike-fal.ts",
+    "verify:fal-schema": "tsx scripts/verify-fal-schema.ts"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "4.0.71",
+    "@ai-sdk/react": "4.0.130",
+    "@fal-ai/client": "1.10.1",
+    "ai": "7.0.127",
+    "drizzle-orm": "0.45.3",
     "next": "16.3.8",
+    "pg": "8.23.1",
+    "pg-boss": "12.36.0",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "sharp": "0.35.5",
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
+    "@types/node": "22.20.5",
+    "@types/pg": "8.23.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "drizzle-kit": "0.31.11",
     "eslint": "^9",
     "eslint-config-next": "16.3.8",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "tsx": "4.23.15",
+    "typescript": "^5",
+    "vitest": "5.0.3"
   }
 }
