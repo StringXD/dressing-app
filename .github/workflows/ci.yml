@@ -10,9 +10,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           # 下限由依赖的 engines 决定，不是随手写的大版本号：
           # pg-boss@12 要求 >=22.12.0（最严的一条），ai@7 要求 >=22

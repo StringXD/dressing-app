@@ -1,5 +1,8 @@
 # Dressing Room
 
+[![CI](https://github.com/StringXD/dressing-app/actions/workflows/ci.yml/badge.svg)](https://github.com/StringXD/dressing-app/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 [中文](README.md) | **English**
 
 Upload a full-body photo, swap in different clothes and hairstyles, and see the result directly.

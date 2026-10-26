@@ -1,5 +1,8 @@
 # 穿搭模拟
 
+[![CI](https://github.com/StringXD/dressing-app/actions/workflows/ci.yml/badge.svg)](https://github.com/StringXD/dressing-app/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 **中文** | [English](README.en.md)
 
 上传一张全身照，换上不同衣服和发型，直接看效果。
