@@ -5,7 +5,7 @@ import { generations, type Generation } from '@/lib/db/schema'
 import type { TaskKind } from '@/lib/domain'
 import type { ModelSpec } from '@/lib/providers'
 
-import { GENERATION_QUEUE, getBoss } from './boss'
+import { generationQueue, getBoss } from './boss'
 import type { GenerationParams } from '@/lib/generation/params'
 
 /** worker 从任务数据里读到的内容。刻意只放 id —— 其余状态一律以 DB 为准。 */
@@ -65,7 +65,7 @@ export async function enqueueGeneration(args: EnqueueGenerationArgs): Promise<Ge
     //
     // 真正的防重复扣费在 claimGeneration()：只认领 queued，见那里的注释。
     const jobId = await boss.send(
-      GENERATION_QUEUE,
+      generationQueue(),
       { generationId: id } satisfies GenerationJobData,
       { singletonKey: id },
     )

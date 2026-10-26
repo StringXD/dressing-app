@@ -1,0 +1,1 @@
+ALTER TABLE "garments" DROP COLUMN "source_kind";

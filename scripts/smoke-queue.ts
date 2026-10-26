@@ -17,12 +17,12 @@
  *   2. ./node_modules/.bin/tsx scripts/smoke-queue.ts
  */
 
-import './lib/load-env'
+import '@/lib/load-env'
 
 import { spawn, type ChildProcess } from 'node:child_process'
 import { setTimeout as sleep } from 'node:timers/promises'
 
-import { inArray, notInArray } from 'drizzle-orm'
+import { and, eq, inArray, notInArray } from 'drizzle-orm'
 import sharp from 'sharp'
 
 import { db } from '@/lib/db'
@@ -34,12 +34,34 @@ import {
   TERMINAL_STATUSES,
 } from '@/lib/db/schema'
 import { getModelById } from '@/lib/providers'
-import { GENERATION_QUEUE, getBoss, stopBoss } from '@/lib/queue/boss'
+import { generationQueue, getBoss, stopBoss } from '@/lib/queue/boss'
 import { enqueueGeneration } from '@/lib/queue/enqueue'
 import { getBossQueueHealth, getGenerationQueueInfo, getQueueStats } from '@/lib/queue/stats'
 import { buildStorageKey, storage } from '@/lib/storage'
 
 import { EVENT_MARKER } from './lib/stub-provider'
+
+/**
+ * 把本脚本切到一条**独立的队列**上。
+ *
+ * 必须在任何 `getBoss()` / `enqueueGeneration()` **之前**执行，所以写在模块体里
+ * 而不是某个函数里 —— 那些函数是懒执行的，但万一将来有人在导入期调用它们，
+ * 这一行放在函数里就会太晚。`spawnWorker` 会把 `process.env` 透传给子进程，
+ * 所以桩 worker 自动落在同一条队列上。
+ *
+ * ── 为什么非隔离不可 ─────────────────────────────────────────
+ * 曾经与真实 worker 共用 `generation` 队列，后果有两个，都在真实数据上：
+ *
+ * 1. 本脚本入队的任务被正在跑的真实 worker 领走，于是这个本该完全免费的
+ *    桩测试真的调用了上游。**实测抓到过**：5 个任务里 2 行的
+ *    `provider_job_id` 是真实上游的任务 id（不是 `stub-` 前缀）。
+ * 2. 下面的"清场"会 `deleteAllJobs` 整条队列 —— 那会把用户正在排队的
+ *    真实任务一起删掉。
+ *
+ * 纪律（"跑测试前记得先停 worker"）守不住这件事：它要求每个人都记得，
+ * 而忘一次的代价是别人的钱。换个队列名是结构性保证。
+ */
+process.env.GENERATION_QUEUE ??= 'generation-smoke'
 
 /** 验收用的并发上限。显式写死并传给子进程，避免 .env 里的值让断言飘忽。 */
 const CONCURRENCY = 2
@@ -137,10 +159,19 @@ function allTerminal(map: Map<string, string>): boolean {
   return [...map.values()].every((s) => TERMINAL.has(s))
 }
 
+/**
+ * 验收专用会话的**固定** id。
+ *
+ * 固定而不是每次随机，是为了让开头的清场能只清理**自己上次留下的**残留。
+ * 随机 id 的话就无从区分"我上一轮留下的"与"用户正在跑的" —— 而那个区分
+ * 恰恰是清场以前出事的原因：它是一个没有会话过滤的全表 update。
+ */
+const SMOKE_SESSION_ID = '00000000-0000-4000-8000-0000000000ff'
+
 async function createSession(): Promise<string> {
-  const id = crypto.randomUUID()
-  await db.insert(sessions).values({ id })
-  return id
+  // 幂等：同一个固定会话会被反复创建
+  await db.insert(sessions).values({ id: SMOKE_SESSION_ID }).onConflictDoNothing()
+  return SMOKE_SESSION_ID
 }
 
 /** 造一张真实落盘的图片资产 —— loadImageInput 会真的去存储层读它 */
@@ -171,11 +202,8 @@ async function createAsset(sessionId: string, rgb: { r: number; g: number; b: nu
  * 服装记录。
  *
  * ⚠️ `generations.garment_id` 指向的是 **garments 表**而不是 assets 表 ——
- * 服装是"带来源信息的资产"，两者不是一回事。直接把 assetId 当 garmentId 传
- * 会被外键拦下（实测如此）。
- *
- * sourceKind 用 screenshot：这类服装没有来源 URL，正好绕开
- * uniqueIndex(session_id, source_url) 对 NULL 的处理。
+ * 服装是"从图里识别出来的衣服"，与原始图片资产不是一回事。直接把 assetId
+ * 当 garmentId 传会被外键拦下（实测如此）。
  */
 async function createGarment(sessionId: string, assetId: string): Promise<string> {
   const id = crypto.randomUUID()
@@ -183,7 +211,6 @@ async function createGarment(sessionId: string, assetId: string): Promise<string
   await db.insert(garments).values({
     id,
     sessionId,
-    sourceKind: 'screenshot',
     assetId,
     title: '验收测试用服装',
     photoType: 'flat-lay',
@@ -204,19 +231,37 @@ async function main(): Promise<void> {
   console.log('0. 清场')
   const boss = await getBoss()
 
+  // 先拿到本脚本专用的会话 id，好让下面那句 update **只动自己名下的任务**
+  const sessionId = await createSession()
+
+  /*
+   * ⚠️ 这个 `.where` 里的 `eq(sessionId)` 是同一条语句里最重要的部分。
+   *
+   * 曾经这里只有 `notInArray(status, TERMINAL)` —— 一个**没有会话过滤的全表
+   * update**。后果是：跑一次验收，库里所有人的非终态任务都会被置成 canceled
+   * （error_code = 'test_cleanup'），其中包括用户正在排队、甚至**上游已经计费**
+   * 的真实任务。取消一个已计费的任务不会退钱，只会让用户看到一个没有原因的结果。
+   *
+   * 队列名隔离（见文件头）解决了"谁领走任务"，这一句解决"谁被清掉" ——
+   * 两件事，缺一不可。
+   */
   await db
     .update(generations)
     .set({ status: 'canceled', errorCode: 'test_cleanup', updatedAt: new Date() })
-    .where(notInArray(generations.status, [...TERMINAL_STATUSES]))
-  ok('上次残留的非终态任务已置为 canceled')
+    .where(
+      and(
+        eq(generations.sessionId, sessionId),
+        notInArray(generations.status, [...TERMINAL_STATUSES]),
+      ),
+    )
+  ok('上次残留的非终态任务已置为 canceled（仅限本脚本的会话）')
 
-  await boss.deleteAllJobs(GENERATION_QUEUE)
-  ok('队列消息已清空')
+  // 独立队列，所以这里删掉的只可能是本脚本自己的消息
+  await boss.deleteAllJobs(generationQueue())
+  ok(`队列消息已清空  \x1b[2m${generationQueue()}\x1b[0m`)
 
   const model = getModelById('fal/apps-v2-tryon')
   if (!model) fail('模型注册表缺少 fal/apps-v2-tryon')
-
-  const sessionId = await createSession()
   const personAssetId = await createAsset(sessionId, { r: 200, g: 160, b: 140 })
   const garmentAssetId = await createAsset(sessionId, { r: 40, g: 80, b: 160 })
   const garmentId = await createGarment(sessionId, garmentAssetId)
@@ -267,14 +312,39 @@ async function main(): Promise<void> {
   const succeededA = batch.filter((id) => finalA.get(id) === 'succeeded')
   assert(succeededA.length === 5, '5 个任务全部成功', `succeeded=${succeededA.length}`)
 
-  // 顺序：从子进程回传的事件里读出真实的开始顺序
+  // 顺序：从子进程回传的事件里读出真实的开始顺序。
+  //
+  // ⚠️ 这里断言的是**有界乱序**，不是严格相等 —— 曾经的写法是错的。
+  // pg-boss 按入队顺序**认领**任务，但 localConcurrency > 1 时，两个 handler
+  // 谁先把 start 写进 stdout 并不受约束：先认领的完全可能后发事件。实测出现过
+  // 符合 FIFO 却过不了严格相等的顺序，之前一直绿是运气。
+  //
+  // 真正成立的性质：第 k 个开始的任务，其入队下标不超过 k + (并发数 - 1)。
+  // 因为下标 0..i-1 必然先于 i 被认领，其中"已认领但尚未开始"的最多 并发数-1 个。
   const startOrder = workerA.events
     .filter((e) => e.event === 'start')
     .map((e) => e.generationId as string)
+
+  // 先确认集合相等：每个任务都开始过且不重复。否则下面的错位检查会失真
+  //（例如某个任务漏了 start 事件时，"下标不超过 k+C-1"反而更容易通过）。
   assert(
-    JSON.stringify(startOrder) === JSON.stringify(batch),
-    '处理顺序与入队顺序完全一致（FIFO）',
-    `实际 ${startOrder.length} 个事件`,
+    startOrder.length === batch.length && batch.every((id) => startOrder.includes(id)),
+    `${batch.length} 个任务各开始了一次，无重复无遗漏`,
+    `事件 ${startOrder.length} 个，去重后 ${new Set(startOrder).size} 个`,
+  )
+
+  const enqueueIndexOf = new Map(batch.map((id, i) => [id, i]))
+  const allowedDisorder = CONCURRENCY - 1
+  const outOfOrder = startOrder
+    .map((id, startedAt) => ({ startedAt, enqueuedAt: enqueueIndexOf.get(id) ?? -1 }))
+    .filter(({ startedAt, enqueuedAt }) => enqueuedAt > startedAt + allowedDisorder)
+
+  assert(
+    outOfOrder.length === 0,
+    `开始顺序符合 FIFO（允许错位 ${allowedDisorder} 位，对应并发上限 ${CONCURRENCY}）`,
+    outOfOrder
+      .map(({ startedAt, enqueuedAt }) => `第 ${startedAt} 个开始的却是入队第 ${enqueuedAt} 个`)
+      .join('；'),
   )
 
   const maxInFlight = Math.max(
@@ -388,8 +458,48 @@ async function main(): Promise<void> {
 
   await killHard(workerD.child)
 
-  // ── D. 收尾 ─────────────────────────────────────────────────
-  console.log('\nD. 收尾')
+  // ── D. 重试预算用尽后必须落终态 ──────────────────────────────
+  console.log('\nD. 重试耗尽：反复失败的任务不能停在 queued')
+
+  const doomedId = (await enqueue()).id
+
+  // 让**每一次**下载都失败，于是两次尝试都会以 output_download_failed 告终。
+  // 修复前这会留下一个永远"排队中"的任务：用户看不到失败原因，统计与队位
+  // 把它算成一个并不存在的待办，而每次 worker 重启对账都会把它重新投一遍。
+  const workerE = spawnWorker({ STUB_LATENCY_MS: '300', STUB_FAIL_DOWNLOADS: '99' })
+
+  // 两次尝试之间还隔着队列的 retryDelay（10 秒），默认 40 秒超时够用
+  await waitFor(
+    '重试预算用尽后任务落终态（若它仍停在 queued，本行会超时）',
+    async () => allTerminal(await statusesOf([doomedId])),
+  )
+
+  // 只数这个任务的 start（C 段能数全部，是因为那一段整段只入队了 1 个任务）。
+  // 这里断言的是"重试恰好发生两次"，计数混进别的任务就会失真。
+  const doomedStarts = workerE.events.filter(
+    (e) => e.event === 'start' && String(e.generationId) === doomedId,
+  ).length
+  // 防空测：若根本没重试过，下面的终态断言就证明不了"预算用尽被正确判定"
+  assert(doomedStarts === 2, '重试确实发生过两次', `start=${doomedStarts}`)
+
+  const doomedStatus = (await statusesOf([doomedId])).get(doomedId)
+  assert(
+    doomedStatus === 'failed',
+    '两次都失败后落终态 failed，而不是回到 queued',
+    `status=${doomedStatus}`,
+  )
+
+  const doomedInfo = await getGenerationQueueInfo(doomedId)
+  assert(
+    doomedInfo?.error?.cost === 'charged',
+    '失败原因可读，且如实标注这张图已经计过费',
+    `error=${doomedInfo?.error ? 'present' : 'missing'}`,
+  )
+
+  await killHard(workerE.child)
+
+  // ── E. 收尾 ─────────────────────────────────────────────────
+  console.log('\nE. 收尾')
   const statsAfter = await getQueueStats()
   assert(statsAfter.queued === 0, '队列已排空', `queued=${statsAfter.queued}`)
   assert(statsAfter.processing === 0, '无任务卡在进行中', `processing=${statsAfter.processing}`)

@@ -43,8 +43,14 @@ export interface StorageAdapter {
  * 校验（只允许已知目录 + UUID 文件名 + 已知扩展名），而不是黑名单式地过滤 `..`。
  *
  * key 由服务端生成（`uploads/<sessionId>/<assetId>.webp`），正常情况下必然通过。
+ *
+ * 三个目录各有明确含义，不要混用：`uploads/` 是用户传上来的，`generated/` 是花钱
+ * 生成出来的，`crops/` 是在本机从前者裁出来的。
+ * （决定一条资产会不会出现在「我传过哪些图」里的是数据库的 `assets.kind`，不是这里
+ *  的目录名 —— 但两者应当说同一件事，否则排查时会被误导到错的方向。）
  */
-const KEY_PATTERN = /^(uploads|generated)\/[0-9a-f-]{36}\/[0-9a-f-]{36}\.(webp|png|jpe?g)$/
+const KEY_PATTERN =
+  /^(uploads|generated|crops)\/[0-9a-f-]{36}\/[0-9a-f-]{36}\.(webp|png|jpe?g)$/
 
 export function isValidStorageKey(key: string): boolean {
   if (key.length > 200) return false
@@ -53,7 +59,7 @@ export function isValidStorageKey(key: string): boolean {
 }
 
 export function buildStorageKey(
-  kind: 'uploads' | 'generated',
+  kind: 'uploads' | 'generated' | 'crops',
   sessionId: string,
   assetId: string,
   ext: 'webp' | 'png' | 'jpg' | 'jpeg',

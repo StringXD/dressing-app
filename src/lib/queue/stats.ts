@@ -1,11 +1,21 @@
-import { and, count, eq, inArray, lt } from 'drizzle-orm'
+import { and, count, desc, eq, inArray, lt } from 'drizzle-orm'
 
 import { db } from '@/lib/db'
 import { generations, TERMINAL_STATUSES, type GenerationStatus } from '@/lib/db/schema'
-import { GENERATION_QUEUE, getBoss } from './boss'
+import { explainGenerationError, type ErrorExplanation } from '@/lib/generation/errors'
+import { generationQueue, getBoss } from './boss'
 
 /** 还在队伍里的状态。终态的任务不再占位。 */
 const ACTIVE_STATUSES: readonly GenerationStatus[] = ['queued', 'processing']
+
+/**
+ * "刷新后还剩什么"最多列这么多条。
+ *
+ * 上限不是洁癖：下面每一条都要单独查一次队位，而未结束的任务
+ * 在 `batchSize=1` 的队列里本来就不会多。真要显示更多，
+ * 该改的是队位的算法（一次查出来），不是把这个数字调大。
+ */
+const MAX_ACTIVE_LIST = 20
 
 export interface QueueStats {
   /** 等待被领取 */
@@ -26,6 +36,14 @@ export interface GenerationQueueInfo {
   position: number
   /** 自己是否仍会被处理（queued 或 processing） */
   active: boolean
+  /**
+   * 失败原因的中文解释，由 `(errorCode, errorMessage)` 推导而来（见 `generation/errors.ts`）。
+   * 没失败过时为 undefined。
+   *
+   * **刻意不暴露 errorMessage 原文**：那是给排查用的上游英文，
+   * 不该出现在面向用户的接口里。要原文就去查 DB。
+   */
+  error?: ErrorExplanation
 }
 
 /**
@@ -67,17 +85,25 @@ export async function getGenerationQueueInfo(
   generationId: string,
 ): Promise<GenerationQueueInfo | null> {
   const [self] = await db
-    .select({ status: generations.status, queueSeq: generations.queueSeq })
+    .select({
+      status: generations.status,
+      queueSeq: generations.queueSeq,
+      errorCode: generations.errorCode,
+      errorMessage: generations.errorMessage,
+    })
     .from(generations)
     .where(eq(generations.id, generationId))
     .limit(1)
 
   if (!self) return null
 
+  // 只在确实失败过时才有解释；成功的任务 errorCode 为空，这里就是 undefined
+  const error = explainGenerationError(self.errorCode, self.errorMessage) ?? undefined
+
   const active = ACTIVE_STATUSES.includes(self.status)
 
   if (!active) {
-    return { status: self.status, position: 0, active: false }
+    return { status: self.status, position: 0, active: false, error }
   }
 
   // 排在前面且仍在队伍里的才算数：已经结束的任务不占位。
@@ -93,6 +119,7 @@ export async function getGenerationQueueInfo(
     status: self.status,
     position: Number(aheadRow?.value ?? 0),
     active: true,
+    error,
   }
 }
 
@@ -126,6 +153,47 @@ export async function getQueueItems(
   return items.filter((item): item is GenerationQueueItem => item !== null)
 }
 
+export interface ActiveGeneration extends GenerationQueueItem {
+  /** 入队时刻（ISO 串）。前端据此显示"已经等了多久" */
+  createdAt: string
+}
+
+/**
+ * 某个会话当前**未结束**的任务，最新的在前。
+ *
+ * 存在理由是修一个真实缺口：进度面板的任务列表来自前端内存里的对话消息，
+ * 一刷新就空了 —— 于是一次正在跑的换装会在界面上彻底消失，用户只能
+ * 反复刷新碰运气。结果区也覆盖不到它：那里只列终态。
+ *
+ * "刷新之后还剩什么"这个问题，必须由服务端回答 —— 客户端的记忆正是丢掉的那部分。
+ *
+ * 队位复用 `getGenerationQueueInfo` 而不在这里另算一遍："前面还有几个"
+ * 只能有一种定义，两个实现迟早会对不上。
+ */
+export async function listActiveGenerations(
+  sessionId: string,
+  limit = MAX_ACTIVE_LIST,
+): Promise<ActiveGeneration[]> {
+  const rows = await db
+    .select({ id: generations.id, createdAt: generations.createdAt })
+    .from(generations)
+    .where(
+      and(eq(generations.sessionId, sessionId), inArray(generations.status, [...ACTIVE_STATUSES])),
+    )
+    .orderBy(desc(generations.queueSeq))
+    .limit(limit)
+
+  const items = await Promise.all(
+    rows.map(async (row) => {
+      const info = await getGenerationQueueInfo(row.id)
+      // 理论上不会为 null（行刚查到），但并发下任务可能刚好结束并被删除
+      return info ? { id: row.id, createdAt: row.createdAt.toISOString(), ...info } : null
+    }),
+  )
+
+  return items.filter((item): item is ActiveGeneration => item !== null)
+}
+
 /**
  * pg-boss 视角的队列健康度。
  *
@@ -143,7 +211,7 @@ export async function getBossQueueHealth(): Promise<{
   active: number
 } | null> {
   const boss = await getBoss()
-  const [row] = await boss.getQueueStats(GENERATION_QUEUE)
+  const [row] = await boss.getQueueStats(generationQueue())
 
   if (!row) return null
 

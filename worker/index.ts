@@ -11,6 +11,11 @@
  * 本文件只负责进程级的事（信号处理、退出码）；队列装配在
  * `@/lib/queue/run-worker` 里，以便被测试直接调用。
  */
+
+// ⚠️ 必须是第一条 import：它加载 .env，而下面的 import 链里有 `@/lib/env`，
+// 那个模块在求值时就要求 DATABASE_URL 已存在。放到后面就来不及了。
+import '@/lib/load-env'
+
 import { startWorker } from '@/lib/queue/run-worker'
 import { stopBoss } from '@/lib/queue/boss'
 

@@ -8,6 +8,34 @@
       "when": 1791014832623,
       "tag": "0000_thankful_warpath",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1791031694693,
+      "tag": "0001_wooden_nuke",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791032144680,
+      "tag": "0002_loose_ezekiel_stane",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1791091994535,
+      "tag": "0003_quiet_frank_castle",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791104094663,
+      "tag": "0004_conscious_vermin",
+      "breakpoints": true
     }
   ]
 }

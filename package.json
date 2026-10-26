@@ -2,6 +2,9 @@
   "name": "dressing-app",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "dev": "next dev --port 4000",
     "build": "next build",
@@ -16,7 +19,7 @@
     "test:watch": "vitest",
     "smoke:upload": "tsx scripts/smoke-upload.ts",
     "smoke:queue": "tsx scripts/smoke-queue.ts",
-    "smoke:resolve": "tsx scripts/smoke-resolve.ts",
+    "smoke:conversations": "tsx scripts/smoke-conversations.ts",
     "spike:fal": "tsx scripts/spike-fal.ts",
     "verify:fal-schema": "tsx scripts/verify-fal-schema.ts"
   },

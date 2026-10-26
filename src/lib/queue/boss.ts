@@ -2,8 +2,29 @@ import { PgBoss, type Queue } from 'pg-boss'
 
 import { env } from '@/lib/env'
 
-/** 生成任务的队列名。目前只有这一条队列，将来加别的（清理、解析）时并列即可。 */
-export const GENERATION_QUEUE = 'generation'
+/** 默认队列名。目前只有这一条队列，将来加别的（清理、解析）时并列即可。 */
+export const DEFAULT_GENERATION_QUEUE = 'generation'
+
+/**
+ * 生成任务的队列名。
+ *
+ * ── 为什么做成可配置 ─────────────────────────────────────────
+ * 不是为了灵活，而是为了让 **smoke 测试与真实 worker 不共用同一条队列**。
+ * 它们曾经共用，而共用有两个后果，**都作用在别人的真实数据上**：
+ *
+ * 1. `smoke:queue` 入队的任务会被正在跑的真实 worker 领走，于是那个本该
+ *    完全免费的桩测试真的向上游发了请求。这不是假设 —— 实测抓到过：
+ *    5 个任务里有 2 行的 `provider_job_id` 是真实上游的任务 id。
+ * 2. 脚本开头的"清场"会 `deleteAllJobs` **整条队列**，并把这个库里
+ *    **所有**非终态任务置为 canceled。也就是说，跑一次测试会把用户
+ *    正在跑的任务杀掉 —— 而那些任务里有些可能上游已经计费。
+ *
+ * 两条都属于"测试破坏了正在发生的真实花钱操作"，所以隔离必须是**结构性**的：
+ * 换个队列名，而不是靠"跑测试前记得先停掉 worker"这种纪律。
+ */
+export function generationQueue(): string {
+  return process.env.GENERATION_QUEUE?.trim() || DEFAULT_GENERATION_QUEUE
+}
 
 /**
  * 队列配置。
@@ -12,9 +33,13 @@ export const GENERATION_QUEUE = 'generation'
  * 所以这些值**只在队列首次创建时生效**。改了这里却发现线上行为没变时，
  * 用 `boss.updateQueue()` 或直接删表重建，别怀疑人生。
  */
-const QUEUE_OPTIONS = {
+export const QUEUE_OPTIONS = {
   // 失败重试 1 次。多数失败是上游 5xx 或内容风控，
   // 内容风控重试无用，5xx 有一次机会够了；真正需要换档降级的是阶段 8 的事。
+  //
+  // ⚠️ 这个值不只影响队列：worker 拿它判断"这是不是最后一次尝试"，
+  // 好让 processGeneration 在预算用尽时落终态而不是退回 queued。
+  // 改这里不需要同步改别处（worker 直接读它）。
   retryLimit: 1,
   retryDelay: 10,
 
@@ -51,7 +76,7 @@ async function startBoss(): Promise<PgBoss> {
   await boss.start()
 
   // 幂等：队列已存在时 ON CONFLICT DO NOTHING，因此可以每次启动都调
-  await boss.createQueue(GENERATION_QUEUE, QUEUE_OPTIONS)
+  await boss.createQueue(generationQueue(), QUEUE_OPTIONS)
 
   return boss
 }

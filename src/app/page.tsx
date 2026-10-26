@@ -1,3 +1,5 @@
+import Link from 'next/link'
+
 import { PhotoGuide } from '@/components/photo-guide'
 import { UploadDropzone } from '@/components/upload-dropzone'
 import { hasEnv } from '@/lib/env'
@@ -11,24 +13,21 @@ const SETUP_ITEMS = [
     affects: ['试衣间', '换发型'],
   },
   {
-    key: 'ONEBOUND_KEY' as const,
-    label: '万邦开放平台',
-    purpose: '淘宝 / 天猫 / 京东 商品链接解析',
-    affects: ['链接换装'],
-  },
-  {
-    key: 'FIRECRAWL_API_KEY' as const,
-    label: 'Firecrawl',
-    purpose: '国际品牌站商品页解析（降级链第二级）',
-    affects: ['链接换装'],
-  },
-  {
     key: 'ANTHROPIC_API_KEY' as const,
     label: 'LLM（Agent）',
     purpose: '对话式 Agent 与服装识别',
     affects: ['对话交互'],
   },
 ]
+
+/**
+ * ⚠️ 必须动态渲染，**不要删掉这一行**。
+ *
+ * 页面上那句"还缺 N 项配置"取决于 `hasEnv(...)`。按默认的静态预渲染，
+ * 它会在 `next build` 那一刻定死 —— 用户构建后才填上 Key，警告依然挂着，
+ * 重启也不消失。自托管场景里"先构建、后配 Key"才是常态。
+ */
+export const dynamic = 'force-dynamic'
 
 export default function Home() {
   const missing = SETUP_ITEMS.filter((item) => !hasEnv(item.key))
@@ -41,6 +40,21 @@ export default function Home() {
           上传一张全身照，换上不同衣服和发型，直接看效果。
         </p>
       </header>
+
+      <Link
+        href="/chat"
+        className="mt-6 flex items-center justify-between rounded-2xl border border-neutral-200 bg-neutral-50 px-4 py-3 text-sm transition-colors hover:border-neutral-300 hover:bg-neutral-100 dark:border-neutral-800 dark:bg-neutral-900 dark:hover:border-neutral-700"
+      >
+        <span>
+          <span className="font-medium">去对话页</span>
+          <span className="ml-2 text-xs text-neutral-500">
+            上传照片、说出想怎么换，Agent 会先报价再等你确认
+          </span>
+        </span>
+        <span aria-hidden="true" className="text-neutral-400">
+          →
+        </span>
+      </Link>
 
       {missing.length > 0 && (
         <section className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-900 dark:bg-amber-950">

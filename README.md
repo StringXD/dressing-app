@@ -1,36 +1,180 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 穿搭模拟
 
-## Getting Started
+**中文** | [English](README.en.md)
 
-First, run the development server:
+上传一张全身照，换上不同衣服和发型，直接看效果。
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+一个**完整的、可自托管的 AI 换装应用**：对话式 Agent 为入口，带任务队列、成本可视化与模型注册表。不依赖任何平台的数据接口 —— 你自己上传照片和服装图，模型负责理解它们。
+
+---
+
+## 项目状态
+
+**主体功能已经可用：克隆下来按快速开始配好两个 Key，就能上传照片 → 用对话交代需求 → 审批付费 → 看结果与账单。**
+
+| 能力 | 状态 |
+|---|---|
+| 上传 / 存储 / EXIF 剥离 | ✅ 可用 |
+| Provider 抽象层 + 模型注册表 | ✅ 可用 |
+| 任务队列 + 独立 Worker（并发上限、崩溃恢复、重试不重复计费） | ✅ 可用，有端到端验收脚本 |
+| fal.ai 三个端点实测 | ✅ 已用真实照片验证 |
+| 对话式 Agent（AI SDK + 工具调用 + HITL 确认） | ✅ 可用 —— 需要 `ANTHROPIC_API_KEY`，见快速开始 |
+| 对话区 / 工作台界面（队列面板、批量网格、历史对话） | ✅ 可用 |
+| 输入质量预检、AI 内容标识、成本看板 | ✅ 可用 |
+| 按件裁图 `cropGarment` | 🚧 **未达发布标准**，见路线图阶段 6 |
+| 自建推理（无需 fal Key） | ⛔ 路线图 |
+
+关于队列：任务是**全局按入队时间认领**的，**每用户严格 FIFO 尚未实现**（pg-boss 跑默认档，`QUEUE_OPTIONS` 里没有 `policy` 字段）。并发上限、崩溃恢复与「重试不重复计费」这三样是有的，且有验收脚本钉住。
+
+---
+
+## 为什么会有这个项目
+
+调研结论是：**不存在可用的"完整换装 App"开源方案**，现有实现全是 demo 级。ComfyUI 有现成节点包，但它本身是 GPL-3.0，且要求使用者在十几个节点之间手工连线。
+
+同时，淘宝、京东等平台已推出官方 AI 试穿 —— 所以这个项目**不做商业化**，也不试图抓取任何平台的数据。它把"我有一张照片、一件想试的衣服"这件事在本地做完。
+
+---
+
+## 架构
+
+```
+浏览器 ── 上传 ──▶ Next.js API ──▶ Postgres ◀── Worker 进程 ──▶ fal.ai
+                       │              │              │
+                       └── 存储（本地磁盘）          └── 轮询 → 转存产物 → 落库
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+**R2 驱动尚未实现**：把 `STORAGE_DRIVER` 设成 `r2` 会直接抛错。这是刻意的 —— 配置成 r2 说明预期是云端存储，静默退回本地磁盘会导致上线后图片"消失"且很难定位。要接入请照着 `StorageAdapter` 接口**新建**一个 `src/lib/storage/r2.ts`（该文件目前不存在，只是给 `index.ts` 里那句抛错文案留的落点）。
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+**为什么必须有独立 Worker 进程**：图像生成要几十秒到几分钟。放在 HTTP 请求里会撞上 Vercel/Next 的函数超时，而且用户关掉页面就该中断吗？不该。任务一旦入队就是独立生命周期，队列落在 Postgres 里（pg-boss，不需要 Redis），进程被杀后重启会自动对账恢复。
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+**为什么产物必须转存**：fal 返回的是它自己 CDN 上的临时 URL，会过期。不转存的话，用户第二天回来看相册全是裂图。
 
-## Learn More
+更多设计取舍与踩过的坑，见各模块顶部的注释 —— 这个项目习惯把"为什么这么写"直接写在代码旁边，而不是另开文档。
 
-To learn more about Next.js, take a look at the following resources:
+---
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## 快速开始
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+前置：**Node 22.12+**、Docker、一个 [fal.ai](https://fal.ai/dashboard/keys) 的 API Key（需双币信用卡充值），以及一个**对话模型**的 API Key（`ANTHROPIC_API_KEY`，任何兼容 Anthropic 协议的端点都行）—— 入口页 `/chat` 没有它不会工作。
 
-## Deploy on Vercel
+> Node 版本下限由依赖的 `engines` 决定，不是随手写的：`pg-boss@12` 要求 `>=22.12.0`，`ai@7` 要求 `>=22`。
+> `package.json` 里已声明 `engines`，版本不够时 npm 会直接警告。
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```bash
+git clone https://github.com/StringXD/dressing-app.git
+cd dressing-app
+cp .env.example .env          # 至少填 FAL_KEY 与 ANTHROPIC_API_KEY
+docker compose up -d postgres
+npm install
+npm run db:migrate
+npm run dev                   # 应用，默认 http://localhost:4000
+npm run worker                # 另开一个终端：Worker 进程
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+端口用 4000 而非默认的 3000，是因为 Windows 上 Docker/WSL2 会保留 2941–3040 端口段，3000 落在其中会导致绑定失败。
+
+**两个进程都要跑**：`npm run dev` 只起 Web，生成任务由 `npm run worker` 消费。
+
+---
+
+## 模型与授权
+
+本项目**不限制自己只用可商用模型** —— 效果优先，由你按自己的用途取舍。
+
+| 端点 | 用途 | 单次成本 | 授权 |
+|---|---|---|---|
+| `fal-ai/fashn/tryon/v1.6` | 换装（旗舰档） | $0.075 | ✅ 可商用 |
+| `fal-ai/image-apps-v2/virtual-try-on` | 换装（经济档） | $0.040 | ✅ 可商用 |
+| `fal-ai/image-apps-v2/hair-change` | 换发型 | $0.040 | ✅ 可商用 |
+
+> ⚠️ **需要商用的话，只挑上面这些 ✅ 的条目。**
+> 注册表允许按"效果优先"收录 `license: 'research'`（禁商用）的模型。真有这种条目时，
+> **启动日志会主动把它们打出来**（worker 与 web 两侧各一次）——
+> 你不需要记得回来翻这张表，克隆下来直接跑也不会漏看。
+> 本表会同步更新，但唯一可信来源始终是 `src/lib/providers/models.config.ts` 的 `license` 字段。
+
+新增模型 = 注册表加一行 + 映射表加一个函数，不需要触碰编排、API 与前端。
+
+---
+
+## 实测数据
+
+以下都是**真实照片实测**，不是文档标称值：
+
+| 端点 | 耗时 | 输出尺寸 | 成本 |
+|---|---|---|---|
+| FASHN v1.6 | 71–259s（波动很大） | **等于输入尺寸** | $0.075 |
+| 通用试穿（经济档） | 50.5s | 3072×4096 | $0.040 |
+| 发型更换 | 24.5s | 3072×4096 | $0.040 |
+
+几个踩过的坑，选型时值得知道：
+
+- **FASHN 会对人物图跑姿态检测**，非真人照片（合成图、剪影）会被拒绝并返回 422。错误信息形如 `body.person_image: Failed to detect body pose in model image.`
+- **FASHN 的输出分辨率等于输入分辨率**。270×360 的照片进去，270×360 出来。想要清晰的预览，得先保证输入清晰。
+- **经济档会给衣服加上原图没有的细节**（实测给一件光板棒球服加上了胸袋和白色滚边）。要忠实选 FASHN，要好看选经济档 —— 这是个真实取舍。
+- **手机商品页截图可以直接用**。实测带状态栏、价格、"加入购物车"按钮、周围杂物的截图，产物里这些元素一个都没漏进去。
+
+---
+
+## 开发
+
+```bash
+npm run typecheck      # tsc
+npm run lint           # eslint
+npm test               # 单元测试（纯逻辑，不打网络、不花钱）
+```
+
+### 验收脚本
+
+⚠️ **注意哪些花钱、哪些不花钱**，别误烧自己的额度：
+
+| 脚本 | 花不花钱 | 说明 |
+|---|---|---|
+| `npm run smoke:upload` | 🆓 | 上传链路，含 EXIF 剥离验证 |
+| `npm run smoke:queue` | 🆓 | 队列端到端：并发上限、崩溃恢复、**重试不重复计费**。用桩 provider，需要 Postgres |
+| `npm run smoke:conversations` | 🆓 | 对话落库：幂等（重发整段历史不产生重复行）、`seq` 顺序、标题只写一次、跨会话读不到。需要 Postgres |
+| `npm run verify:fal-schema` | 🆓 | 用 fal 官方 OpenAPI schema 校验参数映射与枚举词表 |
+| `npm run spike:fal` | 💰 | **真实调用 fal 端点**，验证效果。用你自己的照片：`tsx scripts/spike-fal.ts <人物照> [服装图]` |
+
+`smoke:queue` 会 spawn 真实的 worker 子进程，跑的是真代码，只把"调上游"换成假 provider。
+
+> ⚠️ **`smoke:queue` 用的是独立的队列名（`generation-smoke`）与固定的测试会话。**
+> 这不是洁癖：曾经它与真实 worker 共用 `generation` 队列，于是
+> ① 正在运行的真实 worker 会领走测试任务、真的向上游发请求（实测抓到过）；
+> ② 脚本开头的清场是一句没有会话过滤的全表 update，会把**正在跑的真实任务**
+> 置成 canceled —— 而其中一些上游可能已经计费。
+> 跑验收**不需要**先停掉 worker，但也不该为了跑它去停任何东西。
+
+---
+
+## 路线图
+
+图例：✅ 已完成 · 🚧 部分完成 · ⛔ 未开始
+
+- ✅ **阶段 5**：对话式 Agent 层（AI SDK + 工具调用 + HITL 确认）
+- 🚧 **阶段 6**：Agent 能力扩展
+  - 已完成：结果评估 `critiqueOutfit`、体型 / 色彩季型分析、风格建议 `suggestStyle`、
+    整套提取 `cloneLook`、结果对比 `compareResults`、批量矩阵 `batchTryOn`、
+    输入预检 `inspectPhoto`、找回历史照片 `listRecentPhotos`、成本播报 `getCostSummary`
+  - `cropGarment`（按件裁图）**已实现但未达发布标准**：单件定位靠通用视觉模型的坐标估计，
+      实测精度不够 —— 上装的框会把脸一起裁进去。收紧提示词与「用头部框夹取」两条修法都试过
+      并证伪（夹紧则切掉衣领），要修得换成专门的服装分割端点
+    - 未做：`refineLast`（迭代精修）、`rememberPreference`（偏好记忆）
+- ✅ **阶段 7**：对话区与工作台界面（队列面板、批量网格）—— 「最近结果」区、对比滑块、
+  队列面板（含刷新页面后仍在跑的）、工作台多选网格均已完成
+- ✅ **阶段 8**：输入质量预检 · 成本看板（`getCostSummary`）· AI 内容标识
+  （隐式：产物图带 EXIF 来源；显式：结果图上的可见角标）
+- ⛔ **阶段 9**：自建推理，让没有 fal Key 的人也能跑（Leffa / Stable-Hair / Qwen-Image-Edit 等）
+  - 需要一个真实可调用的推理端点才能落地。**没有实测过的东西不入库** ——
+    注册表是使用者选型的唯一依据，只凭文档加进去会多出一个没人验证过的选项。
+
+---
+
+## 协议与致谢
+
+[Apache-2.0](LICENSE) © 2025 StringXD
+
+图像生成能力来自 [fal.ai](https://fal.ai) 及其上各模型的作者。本仓库不包含任何模型权重。
+
+合规提示：若你面向国内公众提供生成式服务，请注意《人工智能生成合成内容标识办法》要求对生成内容做显式与隐式标识。项目提供 `AI_WATERMARK_ENABLED` 开关（默认开启），但自托管场景下**合规责任在部署者**。

@@ -2,7 +2,7 @@ import { eq, notInArray } from 'drizzle-orm'
 
 import { db } from '@/lib/db'
 import { generations, TERMINAL_STATUSES } from '@/lib/db/schema'
-import { GENERATION_QUEUE, getBoss } from '@/lib/queue/boss'
+import { generationQueue, getBoss } from '@/lib/queue/boss'
 import type { GenerationJobData } from '@/lib/queue/enqueue'
 
 export interface ReconcileResult {
@@ -54,7 +54,7 @@ export async function reconcileOnStartup(): Promise<ReconcileResult> {
   let alreadyQueued = 0
 
   for (const row of pending) {
-    const existing = await boss.findJobs(GENERATION_QUEUE, { key: row.id, queued: true })
+    const existing = await boss.findJobs(generationQueue(), { key: row.id, queued: true })
 
     if (existing.length > 0) {
       alreadyQueued += 1
@@ -62,7 +62,7 @@ export async function reconcileOnStartup(): Promise<ReconcileResult> {
     }
 
     await boss.send(
-      GENERATION_QUEUE,
+      generationQueue(),
       { generationId: row.id } satisfies GenerationJobData,
       { singletonKey: row.id },
     )

@@ -29,7 +29,7 @@
  * 用它，避免为已经成功过的端点再付一次钱。
  */
 
-import './lib/load-env'
+import '@/lib/load-env'
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'

@@ -144,7 +144,14 @@ export interface HairInput {
 
 export type TaskInput = TryOnInput | HairInput
 
-/** 模型必须可商用 —— 调研已确认多个主流开源方案禁商用，这里从源头卡住 */
+/**
+ * 模型授权。
+ *
+ * **这是给使用者的警示，不是项目的自我审查**：本项目自身不商业化，
+ * 因此收录 `research`（禁商用）条目是允许的 —— 效果优先，由使用者按用途取舍。
+ * 但 `license` 必须如实标注，README 的商用替代清单也要同步更新，
+ * 否则就成了让使用者在不知情的情况下承担法律风险。
+ */
 export type ModelLicense = 'commercial' | 'research'
 
 export type ModelTier = 'premium' | 'standard' | 'budget'

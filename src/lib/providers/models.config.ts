@@ -5,12 +5,17 @@ import type { ModelSpec } from './types'
  *
  * **纯数据** —— 新增端点、调整价格、切换降级档位都只改这里，不触碰编排、API 与前端。
  *
- * 所有条目都已逐个核对过 fal 官方 schema 与价格（见各条 comment），
- * `license` 一律为 commercial：调研已确认 OOTDiffusion / CatVTON 等主流换装方案
- * 是 CC BY-NC-SA 4.0（禁商用），本项目定位未定，因此从源头只选可商用的。
+ * 所有条目都已逐个核对过 fal 官方 schema 与价格（见各条 comment）。
  *
- * ⚠️ 刻意不收录 `fal-ai/cat-vton`：该端点 licenseType 为 research（非商用）。
- * 它的效果不差，但一旦产品化就是法律风险。
+ * ⚠️ **`license` 是给使用者的警示，不是项目的自我审查。**
+ * 本项目不限制自己只用可商用模型 —— 效果优先，由使用者按自己的用途取舍：
+ *  - `commercial`：可放心用于商业项目
+ *  - `research`：禁商用。自己玩没问题，拿去赚钱有法律风险
+ * 需要商用时，只挑 `commercial` 的条目（README 有对应清单）。
+ *
+ * 已知尚未收录的候选：`fal-ai/cat-vton`（licenseType 为 research，见 fal schema）。
+ * 按"效果优先"的原则它值得评估后收录，但**必须先拿真实照片实测过再加** ——
+ * 只凭调研印象就入库，会让注册表里出现一个没人验证过的条目。
  */
 export const MODELS: readonly ModelSpec[] = [
   // ── 换装 ─────────────────────────────────────────────────────

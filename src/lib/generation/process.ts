@@ -13,8 +13,10 @@ import {
   type SettledPollResult,
   type TaskInput,
 } from '@/lib/providers'
+import { labelAsAiGenerated } from '@/lib/image/labeling'
 import { storage, buildStorageKey } from '@/lib/storage'
 
+import { isRetryableCode } from './errors'
 import { parseGenerationParams } from './params'
 
 /**
@@ -48,23 +50,6 @@ export class RetryableError extends Error {
     super(message)
     this.name = 'RetryableError'
   }
-}
-
-/**
- * 上游失败码里哪些值得重试。
- *
- * 默认**不重试**：重试内容风控这类确定性拒绝只会多花一次钱，
- * 而且用户等更久。宁可少重试，也不要盲目重试。
- */
-function isRetryable(code: string): boolean {
-  return (
-    code === 'status_request_failed' ||
-    code === 'result_request_failed' ||
-    code === 'output_download_failed' ||
-    code === 'poll_timeout' ||
-    /^http_5\d\d$/.test(code) ||
-    /^http_429$/.test(code)
-  )
 }
 
 /**
@@ -238,17 +223,33 @@ async function storeResult(
   }
 
   const bytes = Buffer.from(await response.arrayBuffer())
+
+  /*
+   * 隐式标识：把"这是 AI 生成的"写进文件本身，让它跟着图一起被下载与转发。
+   * 只存在数据库里的标记不解决问题 —— 用户把图存下来之后就只剩像素了。
+   *
+   * 这一步**永远不会抛**（见 `labeling.ts` 文件头）。这个位置很特殊：
+   * 上游已经计费了，而我们还没落盘 —— 在这里抛错意味着钱花了、图没了。
+   * 少一个标识远好过少一张已经付过钱的图。
+   */
+  const labeled = await labelAsAiGenerated(bytes, mime)
+
+  if (!labeled.labeled) {
+    // 降级是有代价的（用户拿到的文件没有来源信息），所以不能悄无声息
+    console.warn(`[labeling] 生成图未写入 AI 标识（任务 ${generation.id}）：${labeled.reason}`)
+  }
+
   const assetId = crypto.randomUUID()
   const key = buildStorageKey('generated', generation.sessionId, assetId, ext)
 
-  const stored = await storage.put(key, bytes, { mime })
+  const stored = await storage.put(key, labeled.buffer, { mime: labeled.mime })
 
   await db.insert(assets).values({
     id: assetId,
     sessionId: generation.sessionId,
     kind: 'generated',
     storageKey: key,
-    mime,
+    mime: labeled.mime,
     bytes: stored.bytes,
   })
 
@@ -268,6 +269,13 @@ export interface ProcessOptions {
   pollIntervalMs?: number
   pollDeadlineMs?: number
   signal?: AbortSignal
+  /**
+   * 这次失败之后**不会再有下一次尝试**（队列的重试预算已用尽）。
+   *
+   * 由调用方传入而不是自己数次数：重试预算属于队列，`processGeneration`
+   * 无从知道 pg-boss 的 retryLimit 与本次的 retryCount。
+   */
+  isFinalAttempt?: boolean
 }
 
 /**
@@ -328,7 +336,7 @@ export async function processGeneration(
 
     if (polled.state === 'failed') {
       // 上游明确拒绝（内容风控、参数非法）没有重试价值；网络问题才值得再试
-      if (isRetryable(polled.code)) {
+      if (isRetryableCode(polled.code)) {
         throw new RetryableError(polled.code, polled.message)
       }
       throw new TerminalError(polled.code, polled.message)
@@ -360,18 +368,34 @@ export async function processGeneration(
     const message = error instanceof Error ? error.message : String(error)
 
     if (error instanceof RetryableError) {
-      // 退回 queued 再抛出：pg-boss 重新投递时 claimGeneration 才能认领。
-      // 重试预算由队列的 retryLimit 界定，这里不自己数次数。
-      await db
-        .update(generations)
-        .set({
-          status: 'queued',
-          errorCode: code,
-          errorMessage: message,
-          updatedAt: new Date(),
-        })
-        .where(eq(generations.id, generationId))
+      // 重试预算用尽时必须落**终态**。pg-boss 不会再投递它，而 claimGeneration
+      // 只认领 queued —— 于是这一行会永远停在 queued：用户看到的是"排队中"而不是
+      // 失败原因，统计与队位把它算成一个并不存在的待办，启动对账还会反复重投它。
+      if (options.isFinalAttempt) {
+        await db
+          .update(generations)
+          .set({
+            status: 'failed',
+            errorCode: code,
+            errorMessage: message,
+            latencyMs: Date.now() - startedAt,
+            updatedAt: new Date(),
+          })
+          .where(eq(generations.id, generationId))
+      } else {
+        // 退回 queued：pg-boss 重新投递时 claimGeneration 才能认领
+        await db
+          .update(generations)
+          .set({
+            status: 'queued',
+            errorCode: code,
+            errorMessage: message,
+            updatedAt: new Date(),
+          })
+          .where(eq(generations.id, generationId))
+      }
 
+      // 两种情况都要抛出：pg-boss 需要记录这次失败，并据此决定是否再投一次
       throw error
     }
 

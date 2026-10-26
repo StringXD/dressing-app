@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # 下限由依赖的 engines 决定，不是随手写的大版本号：
+          # pg-boss@12 要求 >=22.12.0（最严的一条），ai@7 要求 >=22
+          node-version: '22.12'
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 类型检查
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: 单元测试
+        run: npm test
+
+# 刻意不跑 smoke:* 脚本：它们需要 Postgres、会 spawn 子进程。
+# 其中 smoke:queue 是覆盖队列正确性（并发上限、崩溃恢复、重试不重复计费）
+# 的关键验收，值得进 CI —— 需要先加 postgres service。
+# （注意别写成 FIFO：任务目前是全局按入队时间认领的，每用户严格 FIFO 尚未实现，
+#   见 README 状态表。）
